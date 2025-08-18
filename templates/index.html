@@ -62,7 +62,8 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  const socket = io();
+  // Fuerza POLLING en el cliente (sin WebSocket)
+  const socket = io({ transports: ['polling'] });
   const tbody = document.querySelector('#playersTable tbody');
   const count = document.getElementById('count');
 
@@ -111,6 +112,7 @@
     const form = e.target;
     const payload = Object.fromEntries(new FormData(form).entries());
 
+    // Validación del lado del cliente
     const nameRe = /^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$/;
     if(!payload.full_name || !nameRe.test(payload.full_name.trim())){
       alert('Apellido y nombre: solo letras y espacios.');
@@ -138,7 +140,7 @@
 
   async function removePlayer(id){
     const pass = prompt('Clave de admin para eliminar:');
-    if(pass === null) return;
+    if(pass === null) return; // cancelado
     const res = await fetch(`/remove/${id}`, {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
@@ -153,3 +155,4 @@
 </script>
 </body>
 </html>
+
