@@ -11,4 +11,3 @@ services:
         value: admin123
       - key: DATA_JSON
         value: inscriptos.json
-
