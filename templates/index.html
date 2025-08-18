@@ -62,8 +62,8 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // Fuerza POLLING en el cliente (sin WebSocket)
-  const socket = io({ transports: ['polling'] });
+  // Fuerza WebSocket directo (sin polling)
+  const socket = io({ transports: ['websocket'], upgrade: false });
   const tbody = document.querySelector('#playersTable tbody');
   const count = document.getElementById('count');
 
