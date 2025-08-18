@@ -1,230 +1,239 @@
-import os
-import re
-import json
-import sqlite3
-from urllib.parse import urlparse
-from datetime import datetime
-from flask import Flask, render_template, request, jsonify, send_file
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
-from flask_socketio import SocketIO, emit
-import csv
-from io import StringIO, BytesIO
+importaciones
+importación re
+importar json
+importar sqlite3
+desde urllib.parse importar urlparse
+desde datetime importar datetime
+desde flask importar Flask, render_template, solicitud, jsonify, enviar_archivo
+desde flask_sqlalchemy importar SQLAlchemy
+desde sqlalchemy importar func
+desde flask_socketio importar SocketIO, emitir
+importar csv
+desde io importar StringIO, BytesIO
 
-# Paths base (Render): evita TemplateNotFound
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-app = Flask(
-    __name__,
-    template_folder=os.path.join(BASE_DIR, 'templates'),
-    static_folder=os.path.join(BASE_DIR, 'static')
-)
+aplicación = Flask(__nombre__)
+app.config[ 'CLAVE_SECRETA' ] = os.environ.get( 'CLAVE_SECRETA' , 'dev-secret' )
 
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
+# Ruta absoluta por defecto para SQLite y JSON (Render: disco efímero; OK para pruebas)
+db_path = os.path.abspath( 'golf.db' )
+ruta_de_datos = os.environ.get( 'DATA_JSON' , os.path.abspath( 'inscriptos.json' ))
+app.config[ 'SQLALCHEMY_DATABASE_URI' ] = os.environ.get( 'DATABASE_URL' , f'sqlite:/// {db_path} ' )
+app.config[ 'SQLALCHEMY_TRACK_MODIFICATIONS' ] = Falso
+si app.config[ 'SQLALCHEMY_DATABASE_URI' ].startswith( 'sqlite' ):
+    app.config[ 'OPCIONES_DE_ENGINE_SQLALCHEMY' ] = { "argumentos_de_conexión" : { "verificar_el_mismo_hilo" : Falso }}
 
-# SQLite + JSON (Render: disco efímero; útil para demo/ensayo)
-db_path = os.path.join(BASE_DIR, 'golf.db')
-data_path = os.environ.get('DATA_JSON', os.path.join(BASE_DIR, 'inscriptos.json'))
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'check_same_thread': False}}
+# Clave de admin para borrar (cambiable por variable de entorno)
+CLAVE_ADMIN = os.environ.get( 'CLAVE_ADMIN' , 'admin123' )
 
-ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
+db = SQLAlchemy(aplicación)
+socketio = SocketIO(aplicación, cors_orígenes_permitidos= '*' )
 
-db = SQLAlchemy(app)
+clase Jugador (db.Model):
+ 
+    id = db.Column(db.Integer, clave_principal= True )
+    nombre_completo = db.Column(db.String( 160 ), nulo= Falso )
+    matricula = db.Column(db.String(40), nullable=False)    # opcional -> '' si vacía
+    creado_en = db.Column(db.DateTime, predeterminado=datetime.utcnow, predeterminado_del_servidor=func.now())
 
-# Modo threading (sin eventlet): estable en Render (long-polling)
-socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
-
-# ----------------------- Modelo -----------------------
-class Player(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    full_name = db.Column(db.String(160), nullable=False)   # Apellido y nombre (obligatorio)
-    matricula = db.Column(db.String(40), nullable=False)    # Matrícula opcional -> '' si vacío
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'full_name': self.full_name,
+    def to_dict ( self ):
+ 
+        devolver {
+            'id' : yo mismo . id ,
+            'nombre_completo' : self .nombre_completo,
             'matricula': self.matricula,
-            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M')
+            'creado_en' : self .creado_en.strftime( '%Y-%m-%d %H:%M' )
         }
 
-# ----------------- Auto-upgrade de esquema SQLite -----------------
-def _sqlite_path_from_uri(uri: str) -> str:
-    if not uri.startswith('sqlite'):
-        return ''
-    if uri.endswith(':memory:'):
-        return ':memory:'
-    if uri.startswith('sqlite:///'):
-        return uri.replace('sqlite:///', '', 1)
-    return urlparse(uri).path
+def _sqlite_path_from_uri ( uri: str ) -> str :
+ 
+    si no uri.startswith( 'sqlite' ):
+ 
+        devolver '' 
+    si uri.endswith( ':memoria:' ):
+        devolver ':memoria:' 
+    si uri.startswith( 'sqlite:///' ):
+        devolver uri.replace( 'sqlite:///' , '' , 1 )
+    devuelve urlparse(uri).path
 
-def ensure_sqlite_columns():
-    uri = app.config['SQLALCHEMY_DATABASE_URI']
-    if not uri.startswith('sqlite'):
-        return
-    dbfile = _sqlite_path_from_uri(uri)
-    if not dbfile:
-        return
-    is_memory = (dbfile == ':memory:')
-    if not is_memory and not os.path.exists(dbfile):
-        return
+def asegurar_sqlite_columns ():
+ 
+    uri = app.config[ 'URI_BASE_DE_DATOS_SQLALCHEMY' ]
+    si no uri.startswith( 'sqlite' ):
+ 
+        devolver
+    archivo_base_de_datos = _sqlite_path_from_uri(uri)
+    Si no es dbfile:
+ 
+        devolver
+    is_memory = (archivo_base_de_datos == ':memoria:' )
+    si no es is_memory y no es os.path.exists(dbfile):
+  
+        devolver
 
-    con = sqlite3.connect(dbfile)
+    con = sqlite3.connect(archivo_base_datos)
     cur = con.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='player'")
-    if not cur.fetchone():
+    cur.execute( "SELECCIONAR nombre DE sqlite_master DONDE tipo='tabla' Y nombre='jugador'" )
+    fila = cur.fetchone()
+    si no fila:
+ 
         con.close()
-        return
+        devolver
 
-    cur.execute('PRAGMA table_info(player)')
-    cols = {r[1] for r in cur.fetchall()}
-    changed = False
+    cur.execute( "PRAGMA table_info(jugador)" )
+    cols = {r[ 1 ] para r en cur.fetchall()}
+    cambiado = Falso
 
-    if 'full_name' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ""')
-        if 'name' in cols:
-            cur.execute('''UPDATE player
-                           SET full_name = COALESCE(full_name, name)
-                           WHERE (full_name IS NULL OR full_name="") AND name IS NOT NULL''')
-        changed = True
+    si 'full_name' no está en columnas:
+   
+        cur.execute( "ALTER TABLE jugador ADD COLUMN nombre_completo VARCHAR(160) PREDETERMINADO ''" )
+        si 'nombre' en columnas:
+  
+            cur.execute( """ACTUALIZAR reproductor
+                           SET nombre_completo = COALESCE(nombre_completo, nombre)
+                           DONDE (nombre_completo ES NULO O nombre_completo='') Y nombre NO ES NULO""" )
+        cambiado = Verdadero
 
-    if 'matricula' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN matricula VARCHAR(40) DEFAULT ""')
-        changed = True
+    si 'matricula' no está en cols:
+   
+        cur.execute( "ALTER TABLE jugador ADD COLUMN matrícula VARCHAR(40) DEFAULT ''" )
+        cambiado = Verdadero
 
-    if changed:
+    Si se cambia:
         con.commit()
     con.close()
 
-# ----------------- Backup / Restore JSON -----------------
-def save_json_backup():
-    """Guarda todos los jugadores en DATA_JSON de forma atómica."""
-    players = Player.query.order_by(Player.id.asc()).all()
-    payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
-    for p in players:
+def guardar_json_backup ():
+ 
+    jugadores = Jugador.consulta.order_by(Jugador.id.asc ( )). all ()
+    carga útil = { 'actualizado_a_utc' : datetime.utcnow().isoformat(), 'jugadores' : []}
+    para p en jugadores:
         d = p.to_dict()
-        d['created_at_iso'] = p.created_at.isoformat()
-        payload['players'].append(d)
-    tmp = data_path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, data_path)
+        d[ 'creado_en_iso' ] = p.creado_en.isoformat()
+        carga útil[ 'jugadores' ].append(d)
+    tmp = ruta_de_datos + '.tmp'
+    con abierto (tmp, 'w' , codificación= 'utf-8' ) como f:
+ 
+        json.dump(carga útil, f, asegurar_ascii= Falso , sangría= 2 )
+    os.replace(tmp, ruta_de_datos)
 
-def restore_from_json_if_empty():
-    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB."""
-    if Player.query.count() > 0 or not os.path.exists(data_path):
-        return
-    try:
-        with open(data_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for item in data.get('players', []):
-            dt = None
-            if item.get('created_at_iso'):
-                try:
-                    dt = datetime.fromisoformat(item['created_at_iso'])
-                except Exception:
-                    dt = None
-            if dt is None and item.get('created_at'):
-                for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S'):
-                    try:
-                        dt = datetime.strptime(item['created_at'], fmt)
-                        break
-                    except Exception:
-                        pass
-            dt = dt or datetime.utcnow()
-            p = Player(
-                id=item.get('id'),
-                full_name=(item.get('full_name') or '').strip(),
-                matricula=(item.get('matricula') or '').strip(),
-                created_at=dt
+def restaurar_desde_json_si_vacío ():
+ 
+    si Player.query.count() > 0 o no os.path.exists(data_path):
+  
+        devolver
+    intentar :
+        con abierto (data_path, 'r' , codificación= 'utf-8' ) como f:
+ 
+            datos = json.load(f)
+        para el elemento en datos.get( 'jugadores' , []):
+            dt = Ninguno
+            si item.get( 'creado_en_iso' ):
+                intentar :
+                    dt = datetime.fromisoformat(item[ 'creado_en_iso' ])
+                excepto Excepción:
+                    dt = Ninguno
+            si dt es Ninguno y item.get( 'created_at' ):
+  
+                para fmt en ( '%Y-%m-%d %H:%M' , '%Y-%m-%d %H:%M:%S' ):
+                    intentar :
+                        dt = datetime.strptime(item[ 'creado_en' ], fmt)
+                        romper
+                    excepto Excepción:
+                        aprobar
+            dt = dt o datetime.utcnow()
+            p = Jugador(
+                id =item.get( 'id' ),
+                nombre_completo=(item.get( 'nombre_completo' ) o '' ).strip(),
+ 
+                matrícula=(item.get( 'matrícula' ) o '' ).strip(),
+ 
+                creado_en=dt
             )
             db.session.add(p)
         db.session.commit()
-    except Exception as e:
-        print('No se pudo restaurar desde JSON:', e)
+    excepto Excepción como e:
+        print("No se pudo restaurar desde JSON:", e)
 
-# ----------------- Init DB + Restore -----------------
-if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    ensure_sqlite_columns()
-with app.app_context():
+si app.config[ 'SQLALCHEMY_DATABASE_URI' ].startswith( 'sqlite' ):
+    asegurar_columnas_sqlite()
+con la aplicación.app_context():
     db.create_all()
-    restore_from_json_if_empty()
+    restaurar_desde_json_si_está_vacío()
 
-# ----------------- Rutas -----------------
-NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
+NOMBRE_RE = re. compilar ( r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$' )
 
-@app.route('/', methods=['GET', 'HEAD'])
-def index():
-    if request.method == 'HEAD':
-        return '', 200
-    players = Player.query.order_by(Player.created_at.asc()).all()
-    return render_template('index.html', players=[p.to_dict() for p in players])
+@app.route( '/' )
+definición índice ():
+ 
+    jugadores = Jugador.consulta.ordenar_por(Jugador.creado_en.asc()). todos ()
+    devuelve render_template( 'index.html' , jugadores=[p.to_dict() para p en jugadores])
 
-@app.route('/healthz', methods=['GET', 'HEAD'])
-def healthz():
-    return ('ok', 200)
+@app.route( '/backup.json' )
+def descargar_copia de seguridad ():
+ 
+    si no os.path.exists(ruta_de_datos):
+ 
+        guardar_copia_de_seguridad_json()
+    devolver enviar_archivo(ruta_de_datos, tipo_mime= 'application/json' , como_archivo_adjunto= True , nombre_descarga= 'inscriptos.json' )
 
-@app.route('/backup.json')
-def download_backup():
-    if not os.path.exists(data_path):
-        save_json_backup()
-    return send_file(data_path, mimetype='application/json', as_attachment=True, download_name='inscriptos.json')
-
-@app.route('/signup', methods=['POST'])
-def signup():
-    data = request.get_json(silent=True) or request.form
-    full_name = (data.get('full_name') or data.get('name') or '').strip()
-    matricula = (data.get('matricula') or '').strip()
-
-    if not full_name:
+@app.route( '/signup' , métodos=[ 'POST' ] )
+definición signup ():
+ 
+    datos = solicitud.get_json(silent= True ) o solicitud.formulario
+    nombre_completo = (data.get( 'nombre_completo' ) o data.get( 'nombre' ) o '' ).strip()
+ 
+    matrícula = (data.get( 'matricula' ) o '' ).strip()
+ 
+    si no es nombre_completo:
+ 
         return jsonify({'ok': False, 'error': 'El apellido y nombre es obligatorio.'}), 400
-    if not NAME_RE.fullmatch(full_name):
+    si no NOMBRE_RE.fullmatch(nombre_completo):
+ 
         return jsonify({'ok': False, 'error': 'El apellido y nombre solo admite letras y espacios.'}), 400
-    if matricula and not re.fullmatch(r'\d{1,12}', matricula):
+    si matrícula y no re.fullmatch( r'\d{1,12}' , matrícula):
+ 
         return jsonify({'ok': False, 'error': 'La matrícula debe contener solo números (1–12 dígitos).'}), 400
-
-    player = Player(full_name=full_name, matricula=matricula or '')
-    db.session.add(player)
+    jugador = Jugador(nombre_completo=nombre_completo, matrícula=matrícula o '' )
+ 
+    db.session.add(jugador)
     db.session.commit()
+    guardar_copia_de_seguridad_json()
+    carga útil = jugador.to_dict()
+    socketio.emit( 'player_added' , carga útil)
+    devuelve jsonify({ 'ok' : True , 'player' : payload})
 
-    save_json_backup()
-
-    payload = player.to_dict()
-    socketio.emit('player_added', payload)
-    return jsonify({'ok': True, 'player': payload})
-
-@app.route('/remove/<int:pid>', methods=['POST'])
-def remove(pid):
-    data = request.get_json(silent=True) or {}
-    admin_key = data.get('admin_key') or ''
-    if admin_key != ADMIN_KEY:
+@app.route( '/eliminar/<int:pid>' , métodos=[ 'POST' ] )
+def eliminar ( pid ):
+ 
+    datos = solicitud.get_json(silent= True ) o {}
+    admin_key = datos.get( 'admin_key' ) o '' 
+    si clave_administradora != CLAVE_ADMIN:
         return jsonify({'ok': False, 'error': 'Clave de admin inválida.'}), 403
-
-    p = Player.query.get_or_404(pid)
+    p = Jugador.consulta.obtener_o_404(pid)
     db.session.delete(p)
     db.session.commit()
+    guardar_copia_de_seguridad_json()
+    socketio.emit( 'jugador_eliminado' , { 'id' : pid})
+    devuelve jsonify({ 'ok' : True })
 
-    save_json_backup()
-
-    socketio.emit('player_removed', {'id': pid})
-    return jsonify({'ok': True})
-
-@app.route('/export.csv')
-def export_csv():
-    players = Player.query.order_by(Player.created_at.asc()).all()
+@app.route( '/export.csv' )
+def export_csv ():
+ 
+    jugadores = Jugador.consulta.ordenar_por(Jugador.creado_en.asc()). todos ()
     si = StringIO()
-    writer = csv.writer(si)
-    writer.writerow(['id', 'full_name', 'matricula', 'created_at'])
-    for p in players:
-        writer.writerow([p.id, p.full_name, p.matricula, p.created_at.isoformat()])
-    bio = BytesIO(si.getvalue().encode('utf-8-sig'))
-    bio.seek(0)
-    return send_file(bio, mimetype='text/csv', as_attachment=True, download_name='inscriptos.csv')
+    escritor = csv.escritor(si)
+    escritor.writerow([ 'id' , 'nombre_completo' , 'matrícula' , 'creado_en' ])
+    para p en jugadores:
+        escritor.writerow([p. id , p.nombre_completo, p.matricula, p.creado_en.isoformat()])
+    biografía = BytesIO(si.getvalue().encode( 'utf-8-sig' ))
+    bio.seek( 0 )
+    devolver enviar_archivo(bio, tipo mime= 'texto/csv' , como_archivo_adjunto= True , nombre_descarga= 'inscriptos.csv' )
 
-@socketio.on('connect')
-def handle_connect():
-    players = Player.query.order_by(Player.created_at.asc()).all()
-    emit('bootstrap', [p.to_dict() for p in players])
+@socketio.on( 'conectar' )
+def handle_connect ():
+ 
+    jugadores = Jugador.consulta.ordenar_por(Jugador.creado_en.asc()). todos ()
+    emit( 'bootstrap' , [p.to_dict() para p en jugadores])
+
+si __nombre__ == '__principal__' :
+    socketio.run(aplicación, host= '0.0.0.0' , puerto= int (os.environ.get( 'PUERTO' , 5000 )), depuración= True )
