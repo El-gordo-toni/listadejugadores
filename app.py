@@ -11,12 +11,19 @@ from flask_socketio import SocketIO, emit
 import csv
 from io import StringIO, BytesIO
 
-app = Flask(__name__)
+# Paths base (Render): evita TemplateNotFound
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static')
+)
+
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# SQLite + JSON (Render: disco efímero, útil para demo)
-db_path = os.path.abspath('golf.db')
-data_path = os.environ.get('DATA_JSON', os.path.abspath('inscriptos.json'))
+# SQLite + JSON (Render: disco efímero; útil para demo/ensayo)
+db_path = os.path.join(BASE_DIR, 'golf.db')
+data_path = os.environ.get('DATA_JSON', os.path.join(BASE_DIR, 'inscriptos.json'))
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
@@ -26,9 +33,10 @@ ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
 
 db = SQLAlchemy(app)
 
-# Modo threading (sin eventlet): estable en Render, usa long-polling
+# Modo threading (sin eventlet): estable en Render (long-polling)
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
+# ----------------------- Modelo -----------------------
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(160), nullable=False)   # Apellido y nombre (obligatorio)
@@ -43,7 +51,7 @@ class Player(db.Model):
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M')
         }
 
-# ---- Auto-upgrade SQLite: agrega columnas si faltan ----
+# ----------------- Auto-upgrade de esquema SQLite -----------------
 def _sqlite_path_from_uri(uri: str) -> str:
     if not uri.startswith('sqlite'):
         return ''
@@ -91,6 +99,7 @@ def ensure_sqlite_columns():
         con.commit()
     con.close()
 
+# ----------------- Backup / Restore JSON -----------------
 def save_json_backup():
     """Guarda todos los jugadores en DATA_JSON de forma atómica."""
     players = Player.query.order_by(Player.id.asc()).all()
@@ -137,13 +146,14 @@ def restore_from_json_if_empty():
     except Exception as e:
         print('No se pudo restaurar desde JSON:', e)
 
-# Init
+# ----------------- Init DB + Restore -----------------
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
     ensure_sqlite_columns()
 with app.app_context():
     db.create_all()
     restore_from_json_if_empty()
 
+# ----------------- Rutas -----------------
 NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
 
 @app.route('/')
@@ -212,7 +222,4 @@ def export_csv():
 def handle_connect():
     players = Player.query.order_by(Player.created_at.asc()).all()
     emit('bootstrap', [p.to_dict() for p in players])
-
-if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
 
