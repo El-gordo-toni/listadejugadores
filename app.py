@@ -1,6 +1,3 @@
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import re
 import json
@@ -17,19 +14,19 @@ from io import StringIO, BytesIO
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# SQLite y backup JSON (en Render el disco es efímero; sirve para demo)
+# SQLite + JSON (Render: disco efímero, útil para demo)
 db_path = os.path.abspath('golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.abspath('inscriptos.json'))
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"connect_args": {"check_same_thread": False}}
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'check_same_thread': False}}
 
-# Clave admin para borrar
 ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
 
 db = SQLAlchemy(app)
-# En Render usamos gunicorn -k eventlet (websockets OK)
+
+# Modo threading (sin eventlet): estable en Render, usa long-polling
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
 class Player(db.Model):
@@ -74,20 +71,20 @@ def ensure_sqlite_columns():
         con.close()
         return
 
-    cur.execute("PRAGMA table_info(player)")
+    cur.execute('PRAGMA table_info(player)')
     cols = {r[1] for r in cur.fetchall()}
     changed = False
 
     if 'full_name' not in cols:
-        cur.execute("ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ''")
+        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ""')
         if 'name' in cols:
-            cur.execute("""UPDATE player
+            cur.execute('''UPDATE player
                            SET full_name = COALESCE(full_name, name)
-                           WHERE (full_name IS NULL OR full_name='') AND name IS NOT NULL""")
+                           WHERE (full_name IS NULL OR full_name="") AND name IS NOT NULL''')
         changed = True
 
     if 'matricula' not in cols:
-        cur.execute("ALTER TABLE player ADD COLUMN matricula VARCHAR(40) DEFAULT ''")
+        cur.execute('ALTER TABLE player ADD COLUMN matricula VARCHAR(40) DEFAULT ""')
         changed = True
 
     if changed:
@@ -95,7 +92,7 @@ def ensure_sqlite_columns():
     con.close()
 
 def save_json_backup():
-    """Guarda todos los jugadores en DATA_JSON."""
+    """Guarda todos los jugadores en DATA_JSON de forma atómica."""
     players = Player.query.order_by(Player.id.asc()).all()
     payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
     for p in players:
@@ -138,9 +135,9 @@ def restore_from_json_if_empty():
             db.session.add(p)
         db.session.commit()
     except Exception as e:
-        print("No se pudo restaurar desde JSON:", e)
+        print('No se pudo restaurar desde JSON:', e)
 
-# Init: auto-upgrade + crear tablas + restaurar si aplica
+# Init
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
     ensure_sqlite_columns()
 with app.app_context():
@@ -149,7 +146,6 @@ with app.app_context():
 
 NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
 
-# -------- Rutas --------
 @app.route('/')
 def index():
     players = Player.query.order_by(Player.created_at.asc()).all()
