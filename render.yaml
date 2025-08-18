@@ -4,7 +4,7 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 1 app:app
+    startCommand: gunicorn -k eventlet -w 1 app:app
     autoDeploy: true
     envVars:
       - key: ADMIN_KEY
