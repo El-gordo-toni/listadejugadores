@@ -14,24 +14,25 @@ from io import StringIO, BytesIO
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# Ruta absoluta por defecto para SQLite y JSON (Render: disco efímero; OK para pruebas)
+# SQLite y backup JSON (en Render el disco es efímero; sirve para demo)
 db_path = os.path.abspath('golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.abspath('inscriptos.json'))
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {\"connect_args\": {\"check_same_thread\": False}}
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"connect_args": {"check_same_thread": False}}
 
-# Clave de admin para borrar (cambiable por variable de entorno)
+# Clave admin para borrar
 ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
 
 db = SQLAlchemy(app)
+# En Render usamos gunicorn -k eventlet (websockets OK)
 socketio = SocketIO(app, cors_allowed_origins='*')
 
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    full_name = db.Column(db.String(160), nullable=False)
-    matricula = db.Column(db.String(40), nullable=False)    # opcional -> '' si vacía
+    full_name = db.Column(db.String(160), nullable=False)   # Apellido y nombre (obligatorio)
+    matricula = db.Column(db.String(40), nullable=False)    # Matrícula opcional -> '' si vacío
     created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())
 
     def to_dict(self):
@@ -42,6 +43,7 @@ class Player(db.Model):
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M')
         }
 
+# ---- Auto-upgrade SQLite: agrega columnas si faltan ----
 def _sqlite_path_from_uri(uri: str) -> str:
     if not uri.startswith('sqlite'):
         return ''
@@ -65,8 +67,7 @@ def ensure_sqlite_columns():
     con = sqlite3.connect(dbfile)
     cur = con.cursor()
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='player'")
-    row = cur.fetchone()
-    if not row:
+    if not cur.fetchone():
         con.close()
         return
 
@@ -91,6 +92,7 @@ def ensure_sqlite_columns():
     con.close()
 
 def save_json_backup():
+    """Guarda todos los jugadores en DATA_JSON."""
     players = Player.query.order_by(Player.id.asc()).all()
     payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
     for p in players:
@@ -103,6 +105,7 @@ def save_json_backup():
     os.replace(tmp, data_path)
 
 def restore_from_json_if_empty():
+    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB."""
     if Player.query.count() > 0 or not os.path.exists(data_path):
         return
     try:
@@ -134,6 +137,7 @@ def restore_from_json_if_empty():
     except Exception as e:
         print("No se pudo restaurar desde JSON:", e)
 
+# Init: auto-upgrade + crear tablas + restaurar si aplica
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
     ensure_sqlite_columns()
 with app.app_context():
@@ -142,6 +146,7 @@ with app.app_context():
 
 NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
 
+# -------- Rutas --------
 @app.route('/')
 def index():
     players = Player.query.order_by(Player.created_at.asc()).all()
@@ -158,16 +163,20 @@ def signup():
     data = request.get_json(silent=True) or request.form
     full_name = (data.get('full_name') or data.get('name') or '').strip()
     matricula = (data.get('matricula') or '').strip()
+
     if not full_name:
         return jsonify({'ok': False, 'error': 'El apellido y nombre es obligatorio.'}), 400
     if not NAME_RE.fullmatch(full_name):
         return jsonify({'ok': False, 'error': 'El apellido y nombre solo admite letras y espacios.'}), 400
     if matricula and not re.fullmatch(r'\d{1,12}', matricula):
         return jsonify({'ok': False, 'error': 'La matrícula debe contener solo números (1–12 dígitos).'}), 400
+
     player = Player(full_name=full_name, matricula=matricula or '')
     db.session.add(player)
     db.session.commit()
+
     save_json_backup()
+
     payload = player.to_dict()
     socketio.emit('player_added', payload)
     return jsonify({'ok': True, 'player': payload})
@@ -178,10 +187,13 @@ def remove(pid):
     admin_key = data.get('admin_key') or ''
     if admin_key != ADMIN_KEY:
         return jsonify({'ok': False, 'error': 'Clave de admin inválida.'}), 403
+
     p = Player.query.get_or_404(pid)
     db.session.delete(p)
     db.session.commit()
+
     save_json_backup()
+
     socketio.emit('player_removed', {'id': pid})
     return jsonify({'ok': True})
 
@@ -204,3 +216,4 @@ def handle_connect():
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+
