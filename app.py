@@ -27,7 +27,7 @@ ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
 
 db = SQLAlchemy(app)
 # En Render usamos gunicorn -k eventlet (websockets OK)
-socketio = SocketIO(app, cors_allowed_origins='*')
+socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
