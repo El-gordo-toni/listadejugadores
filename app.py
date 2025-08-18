@@ -156,10 +156,16 @@ with app.app_context():
 # ----------------- Rutas -----------------
 NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
 
-@app.route('/')
+@app.route('/', methods=['GET', 'HEAD'])
 def index():
+    if request.method == 'HEAD':
+        return '', 200
     players = Player.query.order_by(Player.created_at.asc()).all()
     return render_template('index.html', players=[p.to_dict() for p in players])
+
+@app.route('/healthz', methods=['GET', 'HEAD'])
+def healthz():
+    return ('ok', 200)
 
 @app.route('/backup.json')
 def download_backup():
@@ -222,4 +228,3 @@ def export_csv():
 def handle_connect():
     players = Player.query.order_by(Player.created_at.asc()).all()
     emit('bootstrap', [p.to_dict() for p in players])
-
