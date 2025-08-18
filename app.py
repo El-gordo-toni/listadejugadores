@@ -140,7 +140,7 @@ with app.app_context():
     db.create_all()
     restore_from_json_if_empty()
 
-NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
+NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\\s]+$')
 
 @app.route('/')
 def index():
@@ -162,7 +162,7 @@ def signup():
         return jsonify({'ok': False, 'error': 'El apellido y nombre es obligatorio.'}), 400
     if not NAME_RE.fullmatch(full_name):
         return jsonify({'ok': False, 'error': 'El apellido y nombre solo admite letras y espacios.'}), 400
-    if matricula and not re.fullmatch(r'\d{1,12}', matricula):
+    if matricula and not re.fullmatch(r'\\d{1,12}', matricula):
         return jsonify({'ok': False, 'error': 'La matrícula debe contener solo números (1–12 dígitos).'}), 400
     player = Player(full_name=full_name, matricula=matricula or '')
     db.session.add(player)
@@ -204,3 +204,4 @@ def handle_connect():
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+
