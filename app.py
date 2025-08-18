@@ -1,3 +1,7 @@
+# gevent monkey patch DEBE ir primero
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import re
 import json
@@ -34,12 +38,13 @@ ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
 
 db = SQLAlchemy(app)
 
-# Socket.IO en modo threading (sin eventlet). Fuerza POLLING y deshabilita upgrade a WS.
+# Socket.IO con WebSocket real (gevent + gevent-websocket)
 socketio = SocketIO(
     app,
     cors_allowed_origins='*',
-    async_mode='threading',
-    allow_upgrades=False,     # no intentar upgrade a websocket
+    async_mode='gevent',
+    logger=False,
+    engineio_logger=False,
     ping_interval=25,
     ping_timeout=60
 )
@@ -258,4 +263,3 @@ def export_csv():
 def handle_connect():
     players = Player.query.order_by(Player.created_at.asc()).all()
     emit('bootstrap', [p.to_dict() for p in players])
-
