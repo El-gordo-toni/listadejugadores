@@ -10,9 +10,22 @@
     .card{background:#0f1720;border:1px solid #1f2937}
     .form-control, .form-select{background:#0b1320;color:#e6edf3;border-color:#1f2937}
     .btn-primary{background:#2a6df4;border-color:#2a6df4}
-    .btn-outline-danger{border-color:#ef4444;color:#ef4444}
-    .btn-outline-danger:hover{background:#ef4444;color:#fff}
     a{color:#9cc1ff}
+
+    /* Toggle tabla/cards según tamaño */
+    @media (max-width: 576px){
+      #tableWrap { display:none; }
+      #cardsWrap { display:block; }
+      .btn { width:100%; }
+    }
+    @media (min-width: 577px){
+      #tableWrap { display:block; }
+      #cardsWrap { display:none; }
+    }
+
+    /* Cards móviles */
+    .player-card .label {opacity:.7;font-size:.875rem}
+    .player-card .value {font-weight:600}
   </style>
 </head>
 <body>
@@ -41,19 +54,25 @@
           <h3 class="m-0">Inscriptos (en tiempo real)</h3>
           <span id="count" class="badge text-bg-secondary">0</span>
         </div>
-        <div class="table-responsive mt-3">
-          <table class="table table-dark table-striped align-middle" id="playersTable">
+
+        <!-- Vista TABLE (desktop) -->
+        <div id="tableWrap" class="table-responsive mt-3">
+          <table class="table table-dark table-striped table-sm align-middle" id="playersTable">
             <thead>
               <tr>
                 <th>#</th>
                 <th>Apellido y nombre</th>
                 <th>Matrícula</th>
                 <th>Hora</th>
-                <th></th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
+        </div>
+
+        <!-- Vista CARDS (mobile) -->
+        <div id="cardsWrap" class="mt-3" style="display:none">
+          <div id="cardsList" class="vstack gap-2"></div>
         </div>
       </div>
     </div>
@@ -62,10 +81,17 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // Fuerza WebSocket directo (sin polling)
+  // WebSocket real (sin upgrade a polling)
   const socket = io({ transports: ['websocket'], upgrade: false });
+
   const tbody = document.querySelector('#playersTable tbody');
+  const cards = document.getElementById('cardsList');
   const count = document.getElementById('count');
+
+  function escapeHtml(text){
+    const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
+    return (text || '').replace(/[&<>"']/g, m => map[m]);
+  }
 
   function renderRow(p){
     const tr = document.createElement('tr');
@@ -74,36 +100,54 @@
       <td>${p.id}</td>
       <td>${escapeHtml(p.full_name)}</td>
       <td>${escapeHtml(p.matricula)}</td>
-      <td>${p.created_at}</td>
-      <td class="text-end">
-        <button class="btn btn-sm btn-outline-danger" onclick="removePlayer(${p.id})">Eliminar</button>
-      </td>`;
+      <td>${p.created_at}</td>`;
     return tr;
   }
 
-  function escapeHtml(text){
-    const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
-    return (text || '').replace(/[&<>"']/g, m => map[m]);
+  function renderCard(p){
+    const div = document.createElement('div');
+    div.className = 'player-card card p-2';
+    div.id = 'card-'+p.id;
+    div.innerHTML = `
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <div class="label">#</div>
+          <div class="value">${p.id}</div>
+        </div>
+        <div class="flex-grow-1 px-3">
+          <div class="label">Apellido y nombre</div>
+          <div class="value">${escapeHtml(p.full_name)}</div>
+          <div class="label mt-1">Matrícula</div>
+          <div class="value">${escapeHtml(p.matricula || '—')}</div>
+        </div>
+        <div class="text-end">
+          <div class="label">Hora</div>
+          <div class="value">${p.created_at}</div>
+        </div>
+      </div>`;
+    return div;
   }
 
   function refreshCount(){
+    // usar cantidad de registros según tabla
     count.textContent = tbody.querySelectorAll('tr').length;
   }
 
-  socket.on('bootstrap', (players)=>{
-    tbody.innerHTML='';
-    players.forEach(p=> tbody.appendChild(renderRow(p)));
+  function bootstrapList(players){
+    tbody.innerHTML = '';
+    cards.innerHTML = '';
+    players.forEach(p=>{
+      tbody.appendChild(renderRow(p));
+      cards.appendChild(renderCard(p));
+    });
     refreshCount();
-  });
+  }
+
+  socket.on('bootstrap', bootstrapList);
 
   socket.on('player_added', (p)=>{
     tbody.appendChild(renderRow(p));
-    refreshCount();
-  });
-
-  socket.on('player_removed', ({id})=>{
-    const tr = document.getElementById('row-'+id);
-    if(tr){ tr.remove(); }
+    cards.appendChild(renderCard(p));
     refreshCount();
   });
 
@@ -137,22 +181,6 @@
     }
     form.reset();
   });
-
-  async function removePlayer(id){
-    const pass = prompt('Clave de admin para eliminar:');
-    if(pass === null) return; // cancelado
-    const res = await fetch(`/remove/${id}`, {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ admin_key: pass })
-    });
-    const data = await res.json();
-    if(!data.ok){
-      alert(data.error || 'No se pudo eliminar.');
-      return;
-    }
-  }
 </script>
 </body>
 </html>
-
