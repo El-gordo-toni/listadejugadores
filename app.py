@@ -36,7 +36,7 @@ if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
 
 db = SQLAlchemy(app)
 
-# Socket.IO con WebSocket real (gevent + gevent-websocket)
+# Socket.IO con WebSocket real (gevent + gevent-websocket). Deja upgrades habilitados.
 socketio = SocketIO(
     app,
     cors_allowed_origins='*',
@@ -205,6 +205,12 @@ def download_backup():
     if not os.path.exists(data_path):
         save_json_backup()
     return send_file(data_path, mimetype='application/json', as_attachment=True, download_name='inscriptos.json')
+
+# ✅ API para bootstrap por HTTP (fallback si WS no conecta)
+@app.route('/api/players')
+def api_players():
+    players = Player.query.order_by(Player.created_at.asc()).all()
+    return jsonify([p.to_dict() for p in players])
 
 @app.route('/signup', methods=['POST'])
 def signup():
