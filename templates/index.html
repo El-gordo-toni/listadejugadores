@@ -8,7 +8,7 @@
   <style>
     body{background:#0a0f14;color:#e6edf3}
     .card{background:#0f1720;border:1px solid #1f2937}
-    .form-control, .form-select{background:#0b1320;color:#e6edf3;border-color:#1f2937}
+    .form-control{background:#0b1320;color:#e6edf3;border-color:#1f2937}
     .btn-primary{background:#2a6df4;border-color:#2a6df4}
     a{color:#9cc1ff}
 
@@ -81,12 +81,14 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // WebSocket real (sin upgrade a polling)
-  const socket = io({ transports: ['websocket'], upgrade: false });
+  // Intenta WebSocket y, si no puede, cae a polling automáticamente
+  const socket = io({ transports: ['websocket', 'polling'] });
 
   const tbody = document.querySelector('#playersTable tbody');
   const cards = document.getElementById('cardsList');
   const count = document.getElementById('count');
+
+  let bootstrapped = false;
 
   function escapeHtml(text){
     const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
@@ -129,7 +131,6 @@
   }
 
   function refreshCount(){
-    // usar cantidad de registros según tabla
     count.textContent = tbody.querySelectorAll('tr').length;
   }
 
@@ -143,20 +144,40 @@
     refreshCount();
   }
 
-  socket.on('bootstrap', bootstrapList);
+  // ✅ Bootstrap por WebSocket
+  socket.on('bootstrap', (players)=>{
+    bootstrapped = true;
+    bootstrapList(players);
+  });
 
+  // ✅ Fallback: bootstrap por HTTP (si WS tarda o no conecta)
+  async function httpBootstrap(){
+    try{
+      const res = await fetch('/api/players');
+      const players = await res.json();
+      if(!bootstrapped){
+        bootstrapList(players);
+      }
+    }catch(e){
+      console.warn('No se pudo cargar /api/players', e);
+    }
+  }
+  // Lanza bootstrap por HTTP al cargar
+  httpBootstrap();
+
+  // Nuevos jugadores en tiempo real (WS o polling)
   socket.on('player_added', (p)=>{
     tbody.appendChild(renderRow(p));
     cards.appendChild(renderCard(p));
     refreshCount();
   });
 
+  // Al enviar el formulario: validar + postear + agregar localmente
   document.getElementById('signupForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const form = e.target;
     const payload = Object.fromEntries(new FormData(form).entries());
 
-    // Validación del lado del cliente
     const nameRe = /^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$/;
     if(!payload.full_name || !nameRe.test(payload.full_name.trim())){
       alert('Apellido y nombre: solo letras y espacios.');
@@ -179,8 +200,16 @@
       alert(data.error || 'Error al inscribir.');
       return;
     }
+
+    // Agrego al instante con el dato del server (aunque WS no conecte)
+    const p = data.player;
+    tbody.appendChild(renderRow(p));
+    cards.appendChild(renderCard(p));
+    refreshCount();
+
     form.reset();
   });
 </script>
 </body>
 </html>
+
