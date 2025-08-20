@@ -7,7 +7,5 @@ services:
     startCommand: gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 --timeout 90 app:app
     autoDeploy: true
     envVars:
-      - key: ADMIN_KEY
-        value: admin123
       - key: DATA_JSON
         value: inscriptos.json
