@@ -16,7 +16,7 @@ from flask_socketio import SocketIO, emit
 import csv
 from io import StringIO, BytesIO
 
-# Paths base (Render): evita TemplateNotFound
+# Paths base (Render)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(
     __name__,
@@ -26,15 +26,13 @@ app = Flask(
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# SQLite + JSON (Render: disco efímero; útil para demo/ensayo)
+# SQLite + JSON (si usás Disk en Render, podés moverlos a /var/data)
 db_path = os.path.join(BASE_DIR, 'golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.join(BASE_DIR, 'inscriptos.json'))
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'check_same_thread': False}}
-
-ADMIN_KEY = os.environ.get('ADMIN_KEY', 'admin123')
 
 db = SQLAlchemy(app)
 
@@ -97,7 +95,7 @@ def ensure_sqlite_columns():
     changed = False
 
     if 'full_name' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ''')
+        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ""')
         if 'name' in cols:
             cur.execute('''UPDATE player
                            SET full_name = COALESCE(full_name, name)
@@ -105,7 +103,7 @@ def ensure_sqlite_columns():
         changed = True
 
     if 'matricula' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN matricula VARCHAR(40) DEFAULT ''')
+        cur.execute('ALTER TABLE player ADD COLUMN matricula VARCHAR(40) DEFAULT ""')
         changed = True
 
     if changed:
@@ -181,9 +179,9 @@ def index():
         # Fallback mínimo si falta templates/index.html
         return render_template_string("""
         <!doctype html>
-        <html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+        <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
         <title>Matungo Golf</title></head>
-        <body style='font-family:system-ui,Arial,sans-serif;padding:2rem'>
+        <body style="font-family:system-ui,Arial,sans-serif;padding:2rem">
           <h1>Matungo Golf</h1>
           <p><strong>Nota:</strong> falta <code>templates/index.html</code>. Mostrando vista mínima.</p>
           <h3>Inscriptos</h3>
@@ -194,7 +192,7 @@ def index():
             <li>No hay inscriptos todavía.</li>
           {% endfor %}
           </ul>
-          <p>Exportar: <a href='/export.csv'>CSV</a> • <a href='/backup.json'>Backup JSON</a></p>
+          <p>Exportar: <a href="/export.csv">CSV</a> • <a href="/backup.json">Backup JSON</a></p>
         </body></html>
         """, **context), 200
 
@@ -230,22 +228,6 @@ def signup():
     payload = player.to_dict()
     socketio.emit('player_added', payload)
     return jsonify({'ok': True, 'player': payload})
-
-@app.route('/remove/<int:pid>', methods=['POST'])
-def remove(pid):
-    data = request.get_json(silent=True) or {}
-    admin_key = data.get('admin_key') or ''
-    if admin_key != ADMIN_KEY:
-        return jsonify({'ok': False, 'error': 'Clave de admin inválida.'}), 403
-
-    p = Player.query.get_or_404(pid)
-    db.session.delete(p)
-    db.session.commit()
-
-    save_json_backup()
-
-    socketio.emit('player_removed', {'id': pid})
-    return jsonify({'ok': True})
 
 @app.route('/export.csv')
 def export_csv():
