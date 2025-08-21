@@ -67,7 +67,6 @@
               </tr>
             </thead>
             <tbody>
-              {# Render inicial del lado del servidor (SSR) #}
               {% for p in players %}
               <tr id="row-{{ p.id }}">
                 <td>{{ p.id }}</td>
@@ -80,10 +79,9 @@
           </table>
         </div>
 
-        <!-- VISTA TARJETAS (mobile) -->
-        <div id="cardsWrap" class="mt-3" style="display:none">
+        <!-- VISTA CARDS (mobile) -->
+        <div id="cardsWrap" class="mt-3">
           <div id="cardsList" class="vstack gap-2">
-            {# Render inicial del lado del servidor (SSR) #}
             {% for p in players %}
             <div class="player-card card p-2" id="card-{{ p.id }}">
               <div class="d-flex justify-content-between align-items-center">
@@ -114,7 +112,7 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // Intenta WebSocket y, si no puede, cae a polling
+  // WebSocket con fallback a polling
   const socket = io({ transports: ['websocket', 'polling'] });
 
   const tbody = document.querySelector('#playersTable tbody');
@@ -167,7 +165,6 @@
   }
 
   function bootstrapList(players){
-    // Limpiamos y re-renderizamos para evitar duplicados con el SSR
     tbody.innerHTML = '';
     cards.innerHTML = '';
     players.forEach(p=>{
@@ -177,13 +174,11 @@
     refreshCount();
   }
 
-  // Bootstrap en tiempo real (WS/polling)
   socket.on('bootstrap', (players)=>{
     bootstrapped = true;
     bootstrapList(players);
   });
 
-  // Fallback: bootstrap por HTTP si WS no llega
   async function httpBootstrap(){
     try{
       const res = await fetch('/api/players');
@@ -196,22 +191,15 @@
     }
   }
 
-  // 1) Actualiza contador con el SSR inicial
   document.addEventListener('DOMContentLoaded', refreshCount);
-  // 2) Igual hacemos bootstrap por HTTP por si la lista cambió desde el SSR
   httpBootstrap();
 
-  // Nuevos jugadores (tiempo real)
   socket.on('player_added', (p)=>{
-    // Evitar duplicados si ya existiera
-    const trOld = document.getElementById('row-'+p.id);
-    const cardOld = document.getElementById('card-'+p.id);
-    if(!trOld) tbody.appendChild(renderRow(p));
-    if(!cardOld) cards.appendChild(renderCard(p));
+    if(!document.getElementById('row-'+p.id)) tbody.appendChild(renderRow(p));
+    if(!document.getElementById('card-'+p.id)) cards.appendChild(renderCard(p));
     refreshCount();
   });
 
-  // Envío del formulario
   document.getElementById('signupForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const form = e.target;
@@ -227,7 +215,7 @@
       return;
     }
 
-    if(!confirm(`Confirmar inscripción de: ${payload.full_name}?`)) return;
+    if(!confirm(\`Confirmar inscripción de: \${payload.full_name}?\`)) return;
 
     const res = await fetch('/signup', {
       method: 'POST',
@@ -240,12 +228,9 @@
       return;
     }
 
-    // Agrego al instante con la respuesta (sirve si WS/polling no conecta)
     const p = data.player;
-    const trOld = document.getElementById('row-'+p.id);
-    const cardOld = document.getElementById('card-'+p.id);
-    if(!trOld) tbody.appendChild(renderRow(p));
-    if(!cardOld) cards.appendChild(renderCard(p));
+    if(!document.getElementById('row-'+p.id)) tbody.appendChild(renderRow(p));
+    if(!document.getElementById('card-'+p.id)) cards.appendChild(renderCard(p));
     refreshCount();
 
     form.reset();
@@ -253,5 +238,6 @@
 </script>
 </body>
 </html>
+
 
 
