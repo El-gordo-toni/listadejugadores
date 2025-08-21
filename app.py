@@ -37,6 +37,9 @@ def add_no_cache_headers(resp):
 DATA_DIR = os.environ.get('DATA_DIR') or ('/var/data' if os.path.exists('/var/data') else '/tmp')
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# ✅ NUEVO: ruta del logo (archivo estático o URL)
+LOGO_URL = os.environ.get('LOGO_URL', '/static/logo.png')
+
 db_path = os.path.join(DATA_DIR, 'golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.join(DATA_DIR, 'inscriptos.json'))
 
