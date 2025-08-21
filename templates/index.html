@@ -55,7 +55,7 @@
           <span id="count" class="badge text-bg-secondary">0</span>
         </div>
 
-        <!-- Vista TABLE (desktop) -->
+        <!-- VISTA TABLA (desktop) -->
         <div id="tableWrap" class="table-responsive mt-3">
           <table class="table table-dark table-striped table-sm align-middle" id="playersTable">
             <thead>
@@ -66,14 +66,47 @@
                 <th>Hora</th>
               </tr>
             </thead>
-            <tbody></tbody>
+            <tbody>
+              {# Render inicial del lado del servidor (SSR) #}
+              {% for p in players %}
+              <tr id="row-{{ p.id }}">
+                <td>{{ p.id }}</td>
+                <td>{{ p.full_name }}</td>
+                <td>{{ p.matricula }}</td>
+                <td>{{ p.created_at }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
           </table>
         </div>
 
-        <!-- Vista CARDS (mobile) -->
+        <!-- VISTA TARJETAS (mobile) -->
         <div id="cardsWrap" class="mt-3" style="display:none">
-          <div id="cardsList" class="vstack gap-2"></div>
+          <div id="cardsList" class="vstack gap-2">
+            {# Render inicial del lado del servidor (SSR) #}
+            {% for p in players %}
+            <div class="player-card card p-2" id="card-{{ p.id }}">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <div class="label">#</div>
+                  <div class="value">{{ p.id }}</div>
+                </div>
+                <div class="flex-grow-1 px-3">
+                  <div class="label">Apellido y nombre</div>
+                  <div class="value">{{ p.full_name }}</div>
+                  <div class="label mt-1">Matrícula</div>
+                  <div class="value">{{ p.matricula or '—' }}</div>
+                </div>
+                <div class="text-end">
+                  <div class="label">Hora</div>
+                  <div class="value">{{ p.created_at }}</div>
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
         </div>
+
       </div>
     </div>
   </div>
@@ -81,13 +114,12 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // Intenta WebSocket y, si no puede, cae a polling automáticamente
+  // Intenta WebSocket y, si no puede, cae a polling
   const socket = io({ transports: ['websocket', 'polling'] });
 
   const tbody = document.querySelector('#playersTable tbody');
   const cards = document.getElementById('cardsList');
   const count = document.getElementById('count');
-
   let bootstrapped = false;
 
   function escapeHtml(text){
@@ -135,6 +167,7 @@
   }
 
   function bootstrapList(players){
+    // Limpiamos y re-renderizamos para evitar duplicados con el SSR
     tbody.innerHTML = '';
     cards.innerHTML = '';
     players.forEach(p=>{
@@ -144,13 +177,13 @@
     refreshCount();
   }
 
-  // ✅ Bootstrap por WebSocket
+  // Bootstrap en tiempo real (WS/polling)
   socket.on('bootstrap', (players)=>{
     bootstrapped = true;
     bootstrapList(players);
   });
 
-  // ✅ Fallback: bootstrap por HTTP (si WS tarda o no conecta)
+  // Fallback: bootstrap por HTTP si WS no llega
   async function httpBootstrap(){
     try{
       const res = await fetch('/api/players');
@@ -162,17 +195,23 @@
       console.warn('No se pudo cargar /api/players', e);
     }
   }
-  // Lanza bootstrap por HTTP al cargar
+
+  // 1) Actualiza contador con el SSR inicial
+  document.addEventListener('DOMContentLoaded', refreshCount);
+  // 2) Igual hacemos bootstrap por HTTP por si la lista cambió desde el SSR
   httpBootstrap();
 
-  // Nuevos jugadores en tiempo real (WS o polling)
+  // Nuevos jugadores (tiempo real)
   socket.on('player_added', (p)=>{
-    tbody.appendChild(renderRow(p));
-    cards.appendChild(renderCard(p));
+    // Evitar duplicados si ya existiera
+    const trOld = document.getElementById('row-'+p.id);
+    const cardOld = document.getElementById('card-'+p.id);
+    if(!trOld) tbody.appendChild(renderRow(p));
+    if(!cardOld) cards.appendChild(renderCard(p));
     refreshCount();
   });
 
-  // Al enviar el formulario: validar + postear + agregar localmente
+  // Envío del formulario
   document.getElementById('signupForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const form = e.target;
@@ -201,10 +240,12 @@
       return;
     }
 
-    // Agrego al instante con el dato del server (aunque WS no conecte)
+    // Agrego al instante con la respuesta (sirve si WS/polling no conecta)
     const p = data.player;
-    tbody.appendChild(renderRow(p));
-    cards.appendChild(renderCard(p));
+    const trOld = document.getElementById('row-'+p.id);
+    const cardOld = document.getElementById('card-'+p.id);
+    if(!trOld) tbody.appendChild(renderRow(p));
+    if(!cardOld) cards.appendChild(renderCard(p));
     refreshCount();
 
     form.reset();
@@ -212,4 +253,5 @@
 </script>
 </body>
 </html>
+
 
