@@ -65,9 +65,7 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // WS con fallback a polling
   const socket = io({ transports: ['websocket', 'polling'] });
-
   const tbody = document.querySelector('#playersTable tbody');
   const count = document.getElementById('count');
 
@@ -75,7 +73,6 @@
     const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
     return (text || '').replace(/[&<>"']/g, m => map[m]);
   }
-
   function renderRow(p){
     const tr = document.createElement('tr');
     tr.id = 'row-'+p.id;
@@ -85,74 +82,44 @@
       <td>${escapeHtml(p.matricula)}</td>`;
     return tr;
   }
+  function refreshCount(){ count.textContent = tbody.querySelectorAll('tr').length; }
+  function bootstrapList(players){ tbody.innerHTML = ''; players.forEach(p=> tbody.appendChild(renderRow(p))); refreshCount(); }
 
-  function refreshCount(){
-    count.textContent = tbody.querySelectorAll('tr').length;
-  }
-
-  function bootstrapList(players){
-    tbody.innerHTML = '';
-    players.forEach(p=> tbody.appendChild(renderRow(p)));
-    refreshCount();
-  }
-
-  // Bootstrap por WS/polling
   socket.on('bootstrap', bootstrapList);
-
-  // Fallback: refresco por HTTP al cargar
   (async function httpBootstrap(){
-    try{
-      const res = await fetch('/api/players');
-      const players = await res.json();
-      bootstrapList(players);
-    }catch(e){ console.warn('No se pudo cargar /api/players', e); }
+    try{ const res = await fetch('/api/players'); const players = await res.json(); bootstrapList(players); }
+    catch(e){ console.warn('No se pudo cargar /api/players', e); }
   })();
 
-  // Nuevos jugadores en tiempo real
-  socket.on('player_added', (p)=>{
-    tbody.appendChild(renderRow(p));
-    refreshCount();
-  });
+  socket.on('player_added', (p)=>{ tbody.appendChild(renderRow(p)); refreshCount(); });
 
-  // Envío del formulario
   document.getElementById('signupForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const form = e.target;
     const payload = Object.fromEntries(new FormData(form).entries());
 
-    // Validación lado cliente (coincide con la del servidor)
-    const nameRe = /^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\\s.'-]+$/;
+    const nameRe = /^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s.'-]+$/;
     if(!payload.full_name || !nameRe.test(payload.full_name.trim())){
       alert("Apellido y nombre inválido. Permitidos: letras, espacios, tildes, apóstrofo ('), guion (-) y punto (.)");
       return;
     }
-    if(payload.matricula && !/^\\d{1,12}$/.test(payload.matricula.trim())){
+    if(payload.matricula && !/^\d{1,12}$/.test(payload.matricula.trim())){
       alert('Matrícula (opcional): solo números (1–12 dígitos).');
       return;
     }
 
-    if(!confirm(\`Confirmar inscripción de: \${payload.full_name}?\`)) return;
+    if(!confirm(`Confirmar inscripción de: ${payload.full_name}?`)) return;
 
-    const res = await fetch('/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const res = await fetch('/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const data = await res.json();
-    if(!data.ok){
-      alert(data.error || 'Error al inscribir.');
-      return;
-    }
+    if(!data.ok){ alert(data.error || 'Error al inscribir.'); return; }
 
-    // Añadir al instante
     const p = data.player;
     tbody.appendChild(renderRow(p));
     refreshCount();
-
     form.reset();
   });
 
-  // Inicializa contador con SSR inicial
   document.addEventListener('DOMContentLoaded', refreshCount);
 </script>
 </body>
