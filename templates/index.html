@@ -11,27 +11,12 @@
     .form-control{background:#0b1320;color:#e6edf3;border-color:#1f2937}
     .btn-primary{background:#2a6df4;border-color:#2a6df4}
     a{color:#9cc1ff}
-
-    /* Toggle tabla/cards según tamaño */
-    @media (max-width: 576px){
-      #tableWrap { display:none; }
-      #cardsWrap { display:block; }
-      .btn { width:100%; }
-    }
-    @media (min-width: 577px){
-      #tableWrap { display:block; }
-      #cardsWrap { display:none; }
-    }
-
-    /* Cards móviles */
-    .player-card .label {opacity:.7;font-size:.875rem}
-    .player-card .value {font-weight:600}
   </style>
 </head>
 <body>
 <div class="container py-4">
   <div class="row g-4">
-    <div class="col-lg-4">
+    <div class="col-md-4">
       <div class="card p-3 shadow-sm">
         <h3 class="mb-3">Anotate a la fecha</h3>
         <form id="signupForm" class="vstack gap-2" autocomplete="off" novalidate>
@@ -48,22 +33,19 @@
       </div>
     </div>
 
-    <div class="col-lg-8">
+    <div class="col-md-8">
       <div class="card p-3 shadow-sm">
         <div class="d-flex align-items-center justify-content-between">
-          <h3 class="m-0">Inscriptos (en tiempo real)</h3>
+          <h3 class="m-0">Inscriptos</h3>
           <span id="count" class="badge text-bg-secondary">0</span>
         </div>
-
-        <!-- VISTA TABLA (desktop) -->
-        <div id="tableWrap" class="table-responsive mt-3">
+        <div class="table-responsive mt-3">
           <table class="table table-dark table-striped table-sm align-middle" id="playersTable">
             <thead>
               <tr>
                 <th>#</th>
                 <th>Apellido y nombre</th>
                 <th>Matrícula</th>
-                <th>Hora</th>
               </tr>
             </thead>
             <tbody>
@@ -72,53 +54,24 @@
                 <td>{{ p.id }}</td>
                 <td>{{ p.full_name }}</td>
                 <td>{{ p.matricula }}</td>
-                <td>{{ p.created_at }}</td>
               </tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
-
-        <!-- VISTA CARDS (mobile) -->
-        <div id="cardsWrap" class="mt-3">
-          <div id="cardsList" class="vstack gap-2">
-            {% for p in players %}
-            <div class="player-card card p-2" id="card-{{ p.id }}">
-              <div class="d-flex justify-content-between align-items-center">
-                <div>
-                  <div class="label">#</div>
-                  <div class="value">{{ p.id }}</div>
-                </div>
-                <div class="flex-grow-1 px-3">
-                  <div class="label">Apellido y nombre</div>
-                  <div class="value">{{ p.full_name }}</div>
-                  <div class="label mt-1">Matrícula</div>
-                  <div class="value">{{ p.matricula or '—' }}</div>
-                </div>
-                <div class="text-end">
-                  <div class="label">Hora</div>
-                  <div class="value">{{ p.created_at }}</div>
-                </div>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-        </div>
-
       </div>
     </div>
+
   </div>
 </div>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // WebSocket con fallback a polling
+  // WebSocket con fallback a polling (desktop va sobrado con WS)
   const socket = io({ transports: ['websocket', 'polling'] });
 
   const tbody = document.querySelector('#playersTable tbody');
-  const cards = document.getElementById('cardsList');
   const count = document.getElementById('count');
-  let bootstrapped = false;
 
   function escapeHtml(text){
     const map = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' };
@@ -131,33 +84,8 @@
     tr.innerHTML = `
       <td>${p.id}</td>
       <td>${escapeHtml(p.full_name)}</td>
-      <td>${escapeHtml(p.matricula)}</td>
-      <td>${p.created_at}</td>`;
+      <td>${escapeHtml(p.matricula)}</td>`;
     return tr;
-  }
-
-  function renderCard(p){
-    const div = document.createElement('div');
-    div.className = 'player-card card p-2';
-    div.id = 'card-'+p.id;
-    div.innerHTML = `
-      <div class="d-flex justify-content-between align-items-center">
-        <div>
-          <div class="label">#</div>
-          <div class="value">${p.id}</div>
-        </div>
-        <div class="flex-grow-1 px-3">
-          <div class="label">Apellido y nombre</div>
-          <div class="value">${escapeHtml(p.full_name)}</div>
-          <div class="label mt-1">Matrícula</div>
-          <div class="value">${escapeHtml(p.matricula || '—')}</div>
-        </div>
-        <div class="text-end">
-          <div class="label">Hora</div>
-          <div class="value">${p.created_at}</div>
-        </div>
-      </div>`;
-    return div;
   }
 
   function refreshCount(){
@@ -166,40 +94,29 @@
 
   function bootstrapList(players){
     tbody.innerHTML = '';
-    cards.innerHTML = '';
-    players.forEach(p=>{
-      tbody.appendChild(renderRow(p));
-      cards.appendChild(renderCard(p));
-    });
+    players.forEach(p=> tbody.appendChild(renderRow(p)));
     refreshCount();
   }
 
-  socket.on('bootstrap', (players)=>{
-    bootstrapped = true;
-    bootstrapList(players);
-  });
+  // Bootstrap por WS/polling
+  socket.on('bootstrap', bootstrapList);
 
-  async function httpBootstrap(){
+  // Fallback para refrescar lista por HTTP tras cargar
+  (async function httpBootstrap(){
     try{
       const res = await fetch('/api/players');
       const players = await res.json();
-      if(!bootstrapped){
-        bootstrapList(players);
-      }
-    }catch(e){
-      console.warn('No se pudo cargar /api/players', e);
-    }
-  }
+      bootstrapList(players);
+    }catch(e){ console.warn('No se pudo cargar /api/players', e); }
+  })();
 
-  document.addEventListener('DOMContentLoaded', refreshCount);
-  httpBootstrap();
-
+  // Nuevos jugadores en tiempo real
   socket.on('player_added', (p)=>{
-    if(!document.getElementById('row-'+p.id)) tbody.appendChild(renderRow(p));
-    if(!document.getElementById('card-'+p.id)) cards.appendChild(renderCard(p));
+    tbody.appendChild(renderRow(p));
     refreshCount();
   });
 
+  // Envío del formulario
   document.getElementById('signupForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const form = e.target;
@@ -228,16 +145,20 @@
       return;
     }
 
+    // Añadir al instante
     const p = data.player;
-    if(!document.getElementById('row-'+p.id)) tbody.appendChild(renderRow(p));
-    if(!document.getElementById('card-'+p.id)) cards.appendChild(renderCard(p));
+    tbody.appendChild(renderRow(p));
     refreshCount();
 
     form.reset();
   });
+
+  // Inicializa contador con SSR inicial
+  document.addEventListener('DOMContentLoaded', refreshCount);
 </script>
 </body>
 </html>
+
 
 
 
