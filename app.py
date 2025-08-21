@@ -16,17 +16,23 @@ from flask_socketio import SocketIO, emit
 import csv
 from io import StringIO, BytesIO
 
-# Paths base
+# --------- App base ---------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(
     __name__,
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
-
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# SQLite + JSON (si querés persistir en Render con Disk, podés cambiar BASE_DIR por /var/data)
+# Evitar caché de respuestas (por si navegador “atasca” algo)
+@app.after_request
+def add_no_cache_headers(resp):
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    return resp
+
+# --------- DB + JSON backup ---------
 db_path = os.path.join(BASE_DIR, 'golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.join(BASE_DIR, 'inscriptos.json'))
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
@@ -36,7 +42,7 @@ if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
 
 db = SQLAlchemy(app)
 
-# Socket.IO con WebSocket real (gevent + gevent-websocket). Upgrades habilitados (ws -> polling si hace falta)
+# WebSocket real con fallback posible (ws -> polling si el cliente no puede)
 socketio = SocketIO(
     app,
     cors_allowed_origins='*',
@@ -47,22 +53,21 @@ socketio = SocketIO(
     ping_timeout=60
 )
 
-# ----------------------- Modelo -----------------------
+# --------- Modelo ---------
 class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    full_name = db.Column(db.String(160), nullable=False)   # Apellido y nombre (obligatorio)
-    matricula = db.Column(db.String(40), nullable=False)    # Matrícula opcional -> '' si vacío
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())  # interno
+    full_name = db.Column(db.String(160), nullable=False)    # Apellido y nombre (obligatorio)
+    matricula = db.Column(db.String(40), nullable=False)     # Opcional, guardamos '' si viene vacío
+    # created_at queda interno (no se usa en UI)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())
 
     def to_dict(self):
-        # 👉 Solo exponemos lo pedido (sin fecha/hora)
         return {
             'id': self.id,
             'full_name': self.full_name,
             'matricula': self.matricula
         }
 
-# ----------------- Auto-upgrade de esquema SQLite -----------------
 def _sqlite_path_from_uri(uri: str) -> str:
     if not uri.startswith('sqlite'):
         return ''
@@ -110,22 +115,19 @@ def ensure_sqlite_columns():
         con.commit()
     con.close()
 
-# ----------------- Backup / Restore JSON -----------------
 def save_json_backup():
-    """Guarda todos los jugadores en DATA_JSON de forma atómica (solo id, full_name, matricula)."""
+    """Guarda todos los jugadores en DATA_JSON de forma atómica."""
     players = Player.query.order_by(Player.id.asc()).all()
     payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
     for p in players:
-        payload['players'].append({
-            'id': p.id, 'full_name': p.full_name, 'matricula': p.matricula
-        })
+        payload['players'].append(p.to_dict())
     tmp = data_path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     os.replace(tmp, data_path)
 
 def restore_from_json_if_empty():
-    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB (sin fechas)."""
+    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB."""
     if Player.query.count() > 0 or not os.path.exists(data_path):
         return
     try:
@@ -142,15 +144,16 @@ def restore_from_json_if_empty():
     except Exception as e:
         print('No se pudo restaurar desde JSON:', e)
 
-# ----------------- Init DB + Restore -----------------
+# Inicialización
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
     ensure_sqlite_columns()
 with app.app_context():
     db.create_all()
     restore_from_json_if_empty()
 
-# ----------------- Rutas -----------------
-NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
+# --------- Rutas ---------
+# Regex de nombre más permisiva: letras, espacios, tildes, apóstrofo, guion y punto.
+NAME_RE = re.compile(r"^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s.'-]+$")
 
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
@@ -161,7 +164,6 @@ def index():
     try:
         return render_template('index.html', **context)
     except TemplateNotFound:
-        # Fallback mínimo si falta templates/index.html
         return render_template_string("""
         <!doctype html>
         <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -201,18 +203,29 @@ def signup():
     full_name = (data.get('full_name') or data.get('name') or '').strip()
     matricula = (data.get('matricula') or '').strip()
 
+    print('[POST] /signup payload =', {'full_name': full_name, 'matricula': matricula})
+
     if not full_name:
         return jsonify({'ok': False, 'error': 'El apellido y nombre es obligatorio.'}), 400
     if not NAME_RE.fullmatch(full_name):
-        return jsonify({'ok': False, 'error': 'El apellido y nombre solo admite letras y espacios.'}), 400
+        return jsonify({'ok': False, 'error': 'Apellido y nombre inválido. Permitidos: letras, espacios, tildes, apóstrofo (\'), guion (-) y punto (.)'}), 400
     if matricula and not re.fullmatch(r'\d{1,12}', matricula):
         return jsonify({'ok': False, 'error': 'La matrícula debe contener solo números (1–12 dígitos).'}), 400
 
-    player = Player(full_name=full_name, matricula=matricula or '')
-    db.session.add(player)
-    db.session.commit()
+    try:
+        player = Player(full_name=full_name, matricula=matricula or '')
+        db.session.add(player)
+        db.session.commit()
+        print('[DB] Insert OK -> id', player.id)
+    except Exception as e:
+        db.session.rollback()
+        print('[DB] ERROR al insertar:', e)
+        return jsonify({'ok': False, 'error': 'No se pudo guardar en la base.'}), 500
 
-    save_json_backup()
+    try:
+        save_json_backup()
+    except Exception as e:
+        print('[JSON] WARN no se pudo actualizar backup:', e)
 
     payload = player.to_dict()
     socketio.emit('player_added', payload)
@@ -234,3 +247,4 @@ def export_csv():
 def handle_connect():
     players = Player.query.order_by(Player.id.asc()).all()
     emit('bootstrap', [p.to_dict() for p in players])
+
