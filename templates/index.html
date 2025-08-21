@@ -21,11 +21,9 @@
         <h3 class="mb-3">Anotate a la fecha</h3>
         <form id="signupForm" class="vstack gap-2" autocomplete="off" novalidate>
           <input class="form-control" name="full_name" placeholder="Apellido y nombre"
-                 pattern="[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+"
-                 title="Solo letras y espacios" required />
+                 title="Permitidos: letras, espacios, tildes, apóstrofo ('), guion (-) y punto (.)" required />
           <input class="form-control" name="matricula" placeholder="Número de matrícula (opcional)"
-                 inputmode="numeric" pattern="\d{1,12}" maxlength="12"
-                 title="Solo números (1–12 dígitos, opcional)" />
+                 inputmode="numeric" maxlength="12" />
           <button class="btn btn-primary mt-2" type="submit">Confirmar inscripción</button>
         </form>
         <a class="d-block mt-3" href="/export.csv">Descargar CSV</a>
@@ -67,7 +65,7 @@
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-  // WebSocket con fallback a polling (desktop va sobrado con WS)
+  // WS con fallback a polling
   const socket = io({ transports: ['websocket', 'polling'] });
 
   const tbody = document.querySelector('#playersTable tbody');
@@ -101,7 +99,7 @@
   // Bootstrap por WS/polling
   socket.on('bootstrap', bootstrapList);
 
-  // Fallback para refrescar lista por HTTP tras cargar
+  // Fallback: refresco por HTTP al cargar
   (async function httpBootstrap(){
     try{
       const res = await fetch('/api/players');
@@ -122,12 +120,13 @@
     const form = e.target;
     const payload = Object.fromEntries(new FormData(form).entries());
 
-    const nameRe = /^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$/;
+    // Validación lado cliente (coincide con la del servidor)
+    const nameRe = /^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\\s.'-]+$/;
     if(!payload.full_name || !nameRe.test(payload.full_name.trim())){
-      alert('Apellido y nombre: solo letras y espacios.');
+      alert("Apellido y nombre inválido. Permitidos: letras, espacios, tildes, apóstrofo ('), guion (-) y punto (.)");
       return;
     }
-    if(payload.matricula && !/^\d{1,12}$/.test(payload.matricula.trim())){
+    if(payload.matricula && !/^\\d{1,12}$/.test(payload.matricula.trim())){
       alert('Matrícula (opcional): solo números (1–12 dígitos).');
       return;
     }
@@ -158,6 +157,7 @@
 </script>
 </body>
 </html>
+
 
 
 
