@@ -11,6 +11,18 @@
     .form-control{background:#0b1320;color:#e6edf3;border-color:#1f2937}
     .btn-primary{background:#2a6df4;border-color:#2a6df4}
     a{color:#9cc1ff}
+    /* ✅ Marca de agua de logo */
+    body::before{
+      content:"";
+      position: fixed;
+      inset: 0;
+      background: url('{{ logo_url }}') center center / min(50vw, 800px) auto no-repeat;
+      opacity: .08;                /* ajustá la intensidad */
+      filter: grayscale(100%);     /* opcional, para que sea más sutil */
+      pointer-events: none;        /* que no interfiera con clicks */
+      z-index: 0;
+    }
+    .container, .card{ position: relative; z-index: 1; } /* poner contenido por encima */
   </style>
 </head>
 <body>
