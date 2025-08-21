@@ -25,16 +25,22 @@ app = Flask(
 )
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# Evitar caché de respuestas (por si navegador “atasca” algo)
+# No-cache para evitar vistas viejas por navegador/proxy
 @app.after_request
 def add_no_cache_headers(resp):
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     resp.headers['Pragma'] = 'no-cache'
     return resp
 
-# --------- DB + JSON backup ---------
-db_path = os.path.join(BASE_DIR, 'golf.db')
-data_path = os.environ.get('DATA_JSON', os.path.join(BASE_DIR, 'inscriptos.json'))
+# --------- Directorio de datos (SIEMPRE escribible) ---------
+# Si montás un Disk en Render, usá DATA_DIR=/var/data. Si no, cae a /tmp.
+DATA_DIR = os.environ.get('DATA_DIR') or ('/var/data' if os.path.exists('/var/data') else '/tmp')
+os.makedirs(DATA_DIR, exist_ok=True)
+
+db_path = os.path.join(DATA_DIR, 'golf.db')
+data_path = os.environ.get('DATA_JSON', os.path.join(DATA_DIR, 'inscriptos.json'))
+
+# Podés usar Postgres seteando DATABASE_URL; si no, SQLite en DATA_DIR
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
@@ -58,16 +64,12 @@ class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(160), nullable=False)    # Apellido y nombre (obligatorio)
     matricula = db.Column(db.String(40), nullable=False)     # Opcional, guardamos '' si viene vacío
-    # created_at queda interno (no se usa en UI)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())  # interno
 
     def to_dict(self):
-        return {
-            'id': self.id,
-            'full_name': self.full_name,
-            'matricula': self.matricula
-        }
+        return { 'id': self.id, 'full_name': self.full_name, 'matricula': self.matricula }
 
+# --------- Utilidades SQLite ---------
 def _sqlite_path_from_uri(uri: str) -> str:
     if not uri.startswith('sqlite'):
         return ''
@@ -115,8 +117,8 @@ def ensure_sqlite_columns():
         con.commit()
     con.close()
 
+# --------- Backup / Restore JSON ---------
 def save_json_backup():
-    """Guarda todos los jugadores en DATA_JSON de forma atómica."""
     players = Player.query.order_by(Player.id.asc()).all()
     payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
     for p in players:
@@ -127,7 +129,6 @@ def save_json_backup():
     os.replace(tmp, data_path)
 
 def restore_from_json_if_empty():
-    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB."""
     if Player.query.count() > 0 or not os.path.exists(data_path):
         return
     try:
@@ -144,15 +145,18 @@ def restore_from_json_if_empty():
     except Exception as e:
         print('No se pudo restaurar desde JSON:', e)
 
-# Inicialización
+# --------- Init ---------
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
     ensure_sqlite_columns()
 with app.app_context():
     db.create_all()
     restore_from_json_if_empty()
 
+print(f"[INIT] DATA_DIR={DATA_DIR}")
+print(f"[INIT] DB={app.config['SQLALCHEMY_DATABASE_URI']}")
+print(f"[INIT] JSON={data_path}")
+
 # --------- Rutas ---------
-# Regex de nombre más permisiva: letras, espacios, tildes, apóstrofo, guion y punto.
 NAME_RE = re.compile(r"^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s.'-]+$")
 
 @app.route('/', methods=['GET', 'HEAD'])
