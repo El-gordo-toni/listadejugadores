@@ -36,7 +36,7 @@ if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
 
 db = SQLAlchemy(app)
 
-# Socket.IO con WebSocket real (gevent + gevent-websocket). Deja upgrades habilitados.
+# Socket.IO con WebSocket real (gevent + gevent-websocket). Upgrades habilitados (ws -> polling).
 socketio = SocketIO(
     app,
     cors_allowed_origins='*',
