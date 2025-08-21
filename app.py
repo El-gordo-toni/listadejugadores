@@ -1,4 +1,4 @@
-# gevent monkey patch DEBE ir primero
+# gevent monkey patch DEBE ir primero (para WebSocket real en Render)
 from gevent import monkey
 monkey.patch_all()
 
@@ -16,7 +16,7 @@ from flask_socketio import SocketIO, emit
 import csv
 from io import StringIO, BytesIO
 
-# Paths base (Render)
+# Paths base
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 app = Flask(
     __name__,
@@ -26,7 +26,7 @@ app = Flask(
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# SQLite + JSON (si usás Disk en Render, podés moverlos a /var/data)
+# SQLite + JSON (si querés persistir en Render con Disk, podés cambiar BASE_DIR por /var/data)
 db_path = os.path.join(BASE_DIR, 'golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.join(BASE_DIR, 'inscriptos.json'))
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
@@ -36,7 +36,7 @@ if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
 
 db = SQLAlchemy(app)
 
-# Socket.IO con WebSocket real (gevent + gevent-websocket). Upgrades habilitados (ws -> polling).
+# Socket.IO con WebSocket real (gevent + gevent-websocket). Upgrades habilitados (ws -> polling si hace falta)
 socketio = SocketIO(
     app,
     cors_allowed_origins='*',
@@ -52,14 +52,14 @@ class Player(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(160), nullable=False)   # Apellido y nombre (obligatorio)
     matricula = db.Column(db.String(40), nullable=False)    # Matrícula opcional -> '' si vacío
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())  # interno
 
     def to_dict(self):
+        # 👉 Solo exponemos lo pedido (sin fecha/hora)
         return {
             'id': self.id,
             'full_name': self.full_name,
-            'matricula': self.matricula,
-            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M')
+            'matricula': self.matricula
         }
 
 # ----------------- Auto-upgrade de esquema SQLite -----------------
@@ -112,45 +112,30 @@ def ensure_sqlite_columns():
 
 # ----------------- Backup / Restore JSON -----------------
 def save_json_backup():
-    """Guarda todos los jugadores en DATA_JSON de forma atómica."""
+    """Guarda todos los jugadores en DATA_JSON de forma atómica (solo id, full_name, matricula)."""
     players = Player.query.order_by(Player.id.asc()).all()
     payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
     for p in players:
-        d = p.to_dict()
-        d['created_at_iso'] = p.created_at.isoformat()
-        payload['players'].append(d)
+        payload['players'].append({
+            'id': p.id, 'full_name': p.full_name, 'matricula': p.matricula
+        })
     tmp = data_path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     os.replace(tmp, data_path)
 
 def restore_from_json_if_empty():
-    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB."""
+    """Si la tabla está vacía y existe el JSON, restaura los datos a la DB (sin fechas)."""
     if Player.query.count() > 0 or not os.path.exists(data_path):
         return
     try:
         with open(data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         for item in data.get('players', []):
-            dt = None
-            if item.get('created_at_iso'):
-                try:
-                    dt = datetime.fromisoformat(item['created_at_iso'])
-                except Exception:
-                    dt = None
-            if dt is None and item.get('created_at'):
-                for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S'):
-                    try:
-                        dt = datetime.strptime(item['created_at'], fmt)
-                        break
-                    except Exception:
-                        pass
-            dt = dt or datetime.utcnow()
             p = Player(
                 id=item.get('id'),
                 full_name=(item.get('full_name') or '').strip(),
                 matricula=(item.get('matricula') or '').strip(),
-                created_at=dt
             )
             db.session.add(p)
         db.session.commit()
@@ -171,7 +156,7 @@ NAME_RE = re.compile(r'^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s]+$')
 def index():
     if request.method == 'HEAD':
         return '', 200
-    players = Player.query.order_by(Player.created_at.asc()).all()
+    players = Player.query.order_by(Player.id.asc()).all()
     context = {'players': [p.to_dict() for p in players]}
     try:
         return render_template('index.html', **context)
@@ -183,11 +168,10 @@ def index():
         <title>Matungo Golf</title></head>
         <body style="font-family:system-ui,Arial,sans-serif;padding:2rem">
           <h1>Matungo Golf</h1>
-          <p><strong>Nota:</strong> falta <code>templates/index.html</code>. Mostrando vista mínima.</p>
           <h3>Inscriptos</h3>
           <ul>
           {% for p in players %}
-            <li>#{{p.id}} — {{p.full_name}} {% if p.matricula %}(Mat: {{p.matricula}}){% endif %} — {{p.created_at}}</li>
+            <li>#{{p.id}} — {{p.full_name}} {% if p.matricula %}(Mat: {{p.matricula}}){% endif %}</li>
           {% else %}
             <li>No hay inscriptos todavía.</li>
           {% endfor %}
@@ -206,10 +190,9 @@ def download_backup():
         save_json_backup()
     return send_file(data_path, mimetype='application/json', as_attachment=True, download_name='inscriptos.json')
 
-# ✅ API para bootstrap por HTTP (fallback si WS no conecta)
 @app.route('/api/players')
 def api_players():
-    players = Player.query.order_by(Player.created_at.asc()).all()
+    players = Player.query.order_by(Player.id.asc()).all()
     return jsonify([p.to_dict() for p in players])
 
 @app.route('/signup', methods=['POST'])
@@ -237,17 +220,17 @@ def signup():
 
 @app.route('/export.csv')
 def export_csv():
-    players = Player.query.order_by(Player.created_at.asc()).all()
+    players = Player.query.order_by(Player.id.asc()).all()
     si = StringIO()
     writer = csv.writer(si)
-    writer.writerow(['id', 'full_name', 'matricula', 'created_at'])
+    writer.writerow(['id', 'full_name', 'matricula'])
     for p in players:
-        writer.writerow([p.id, p.full_name, p.matricula, p.created_at.isoformat()])
+        writer.writerow([p.id, p.full_name, p.matricula])
     bio = BytesIO(si.getvalue().encode('utf-8-sig'))
     bio.seek(0)
     return send_file(bio, mimetype='text/csv', as_attachment=True, download_name='inscriptos.csv')
 
 @socketio.on('connect')
 def handle_connect():
-    players = Player.query.order_by(Player.created_at.asc()).all()
+    players = Player.query.order_by(Player.id.asc()).all()
     emit('bootstrap', [p.to_dict() for p in players])
