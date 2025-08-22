@@ -37,9 +37,6 @@ def add_no_cache_headers(resp):
 DATA_DIR = os.environ.get('DATA_DIR') or ('/var/data' if os.path.exists('/var/data') else '/tmp')
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ✅ NUEVO: ruta del logo (archivo estático o URL)
-LOGO_URL = os.environ.get('LOGO_URL', '/static/logo.png')
-
 db_path = os.path.join(DATA_DIR, 'golf.db')
 data_path = os.environ.get('DATA_JSON', os.path.join(DATA_DIR, 'inscriptos.json'))
 
@@ -61,6 +58,12 @@ socketio = SocketIO(
     ping_interval=25,
     ping_timeout=60
 )
+
+# --------- Config de logos ---------
+# LOGO_URL: imagen para marca de agua de fondo
+# LOGO_HEADER_URL: imagen chica en el encabezado (si no se setea, usa LOGO_URL)
+LOGO_URL = os.environ.get('LOGO_URL', '/static/logo.png')
+LOGO_HEADER_URL = os.environ.get('LOGO_HEADER_URL', LOGO_URL)
 
 # --------- Modelo ---------
 class Player(db.Model):
@@ -105,7 +108,7 @@ def ensure_sqlite_columns():
     changed = False
 
     if 'full_name' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ""')
+        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ''')
         if 'name' in cols:
             cur.execute('''UPDATE player
                            SET full_name = COALESCE(full_name, name)
@@ -167,25 +170,42 @@ def index():
     if request.method == 'HEAD':
         return '', 200
     players = Player.query.order_by(Player.id.asc()).all()
-    context = {'players': [p.to_dict() for p in players]}
+    context = {
+        'players': [p.to_dict() for p in players],
+        'logo_url': LOGO_URL,
+        'header_logo_url': LOGO_HEADER_URL
+    }
     try:
         return render_template('index.html', **context)
     except TemplateNotFound:
+        # Fallback mínimo si falta el template
         return render_template_string("""
         <!doctype html>
         <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>Matungo Golf</title></head>
-        <body style="font-family:system-ui,Arial,sans-serif;padding:2rem">
-          <h1>Matungo Golf</h1>
-          <h3>Inscriptos</h3>
-          <ul>
-          {% for p in players %}
-            <li>#{{p.id}} — {{p.full_name}} {% if p.matricula %}(Mat: {{p.matricula}}){% endif %}</li>
-          {% else %}
-            <li>No hay inscriptos todavía.</li>
-          {% endfor %}
-          </ul>
-          <p>Exportar: <a href="/export.csv">CSV</a> • <a href="/backup.json">Backup JSON</a></p>
+        <title>Matungo Golf</title>
+        <style>
+          body{font-family:system-ui,Arial,sans-serif}
+          body::before{
+            content:""; position:fixed; inset:0;
+            background:url('{{ logo_url }}') center/40% no-repeat;
+            opacity:.08; filter:grayscale(100%); pointer-events:none; z-index:0;
+          }
+          .wrap{position:relative; z-index:1; padding:2rem}
+        </style>
+        </head>
+        <body>
+          <div class="wrap">
+            <h1><img src="{{ header_logo_url }}" alt="Logo" style="height:42px;vertical-align:middle;margin-right:.5rem" onerror="this.style.display='none'"> Matungo Golf</h1>
+            <h3>Inscriptos</h3>
+            <ul>
+            {% for p in players %}
+              <li>#{{p.id}} — {{p.full_name}} {% if p.matricula %}(Mat: {{p.matricula}}){% endif %}</li>
+            {% else %}
+              <li>No hay inscriptos todavía.</li>
+            {% endfor %}
+            </ul>
+            <p>Exportar: <a href="/export.csv">CSV</a> • <a href="/backup.json">Backup JSON</a></p>
+          </div>
         </body></html>
         """, **context), 200
 
@@ -254,4 +274,5 @@ def export_csv():
 def handle_connect():
     players = Player.query.order_by(Player.id.asc()).all()
     emit('bootstrap', [p.to_dict() for p in players])
+
 
