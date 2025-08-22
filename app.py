@@ -5,16 +5,13 @@ monkey.patch_all()
 import os
 import re
 import json
-import sqlite3
-from urllib.parse import urlparse
 from datetime import datetime
 from flask import Flask, render_template, render_template_string, request, jsonify, send_file
 from jinja2 import TemplateNotFound
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
 from flask_socketio import SocketIO, emit
 import csv
 from io import StringIO, BytesIO
+from gevent.lock import Semaphore
 
 # --------- App base ---------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +22,7 @@ app = Flask(
 )
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret')
 
-# No-cache para evitar vistas viejas por navegador/proxy
+# No-cache para evitar vistas viejas por navegador/proxy/CDN
 @app.after_request
 def add_no_cache_headers(resp):
     resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -33,22 +30,59 @@ def add_no_cache_headers(resp):
     return resp
 
 # --------- Directorio de datos (SIEMPRE escribible) ---------
-# Si montás un Disk en Render, usá DATA_DIR=/var/data. Si no, cae a /tmp.
+# Si montás un Disk en Render, seteá DATA_DIR=/var/data. Si no, cae a /tmp.
 DATA_DIR = os.environ.get('DATA_DIR') or ('/var/data' if os.path.exists('/var/data') else '/tmp')
 os.makedirs(DATA_DIR, exist_ok=True)
 
-db_path = os.path.join(DATA_DIR, 'golf.db')
-data_path = os.environ.get('DATA_JSON', os.path.join(DATA_DIR, 'inscriptos.json'))
+DATA_JSON = os.environ.get('DATA_JSON', os.path.join(DATA_DIR, 'inscriptos.json'))
 
-# Podés usar Postgres seteando DATABASE_URL; si no, SQLite en DATA_DIR
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', f'sqlite:///{db_path}')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'connect_args': {'check_same_thread': False}}
+# --------- Config de logos ---------
+LOGO_URL = os.environ.get('LOGO_URL', '/static/logo.png')
+LOGO_HEADER_URL = os.environ.get('LOGO_HEADER_URL', LOGO_URL)
 
-db = SQLAlchemy(app)
+# --------- Almacenamiento JSON (sin DB) ---------
+LOCK = Semaphore()
+STORE = {"players": [], "last_id": 0}  # players: [{id, full_name, matricula}]
 
-# WebSocket real con fallback posible (ws -> polling si el cliente no puede)
+def load_store():
+    global STORE
+    if not os.path.exists(DATA_JSON):
+        STORE = {"players": [], "last_id": 0}
+        return
+    try:
+        with open(DATA_JSON, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        players = data.get('players', [])
+        # Normalizo y calculo last_id
+        for p in players:
+            p['id'] = int(p.get('id', 0))
+            p['full_name'] = (p.get('full_name') or '').strip()
+            p['matricula'] = (p.get('matricula') or '').strip()
+        last_id = max([p['id'] for p in players], default=0)
+        STORE = {"players": players, "last_id": data.get('last_id', last_id)}
+    except Exception as e:
+        print("[JSON] ERROR al cargar store:", e)
+        STORE = {"players": [], "last_id": 0}
+
+def save_store():
+    tmp = DATA_JSON + '.tmp'
+    payload = {
+        "updated_at_utc": datetime.utcnow().isoformat(),
+        "last_id": STORE["last_id"],
+        "players": STORE["players"],
+    }
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DATA_JSON)
+
+# Cargar en arranque
+load_store()
+
+print(f"[INIT] DATA_DIR={DATA_DIR}")
+print(f"[INIT] JSON={DATA_JSON}")
+print(f"[INIT] CARGADOS {len(STORE['players'])} jugadores, last_id={STORE['last_id']}")
+
+# --------- Socket.IO ---------
 socketio = SocketIO(
     app,
     cors_allowed_origins='*',
@@ -59,126 +93,23 @@ socketio = SocketIO(
     ping_timeout=60
 )
 
-# --------- Config de logos ---------
-# LOGO_URL: imagen para marca de agua de fondo
-# LOGO_HEADER_URL: imagen chica en el encabezado (si no se setea, usa LOGO_URL)
-LOGO_URL = os.environ.get('LOGO_URL', '/static/logo.png')
-LOGO_HEADER_URL = os.environ.get('LOGO_HEADER_URL', LOGO_URL)
-
-# --------- Modelo ---------
-class Player(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    full_name = db.Column(db.String(160), nullable=False)    # Apellido y nombre (obligatorio)
-    matricula = db.Column(db.String(40), nullable=False)     # Opcional, guardamos '' si viene vacío
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, server_default=func.now())  # interno
-
-    def to_dict(self):
-        return { 'id': self.id, 'full_name': self.full_name, 'matricula': self.matricula }
-
-# --------- Utilidades SQLite ---------
-def _sqlite_path_from_uri(uri: str) -> str:
-    if not uri.startswith('sqlite'):
-        return ''
-    if uri.endswith(':memory:'):
-        return ':memory:'
-    if uri.startswith('sqlite:///'):
-        return uri.replace('sqlite:///', '', 1)
-    return urlparse(uri).path
-
-def ensure_sqlite_columns():
-    uri = app.config['SQLALCHEMY_DATABASE_URI']
-    if not uri.startswith('sqlite'):
-        return
-    dbfile = _sqlite_path_from_uri(uri)
-    if not dbfile:
-        return
-    is_memory = (dbfile == ':memory:')
-    if not is_memory and not os.path.exists(dbfile):
-        return
-
-    con = sqlite3.connect(dbfile)
-    cur = con.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='player'")
-    if not cur.fetchone():
-        con.close()
-        return
-
-    cur.execute('PRAGMA table_info(player)')
-    cols = {r[1] for r in cur.fetchall()}
-    changed = False
-
-    if 'full_name' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN full_name VARCHAR(160) DEFAULT ''')
-        if 'name' in cols:
-            cur.execute('''UPDATE player
-                           SET full_name = COALESCE(full_name, name)
-                           WHERE (full_name IS NULL OR full_name="") AND name IS NOT NULL''')
-        changed = True
-
-    if 'matricula' not in cols:
-        cur.execute('ALTER TABLE player ADD COLUMN matricula VARCHAR(40) DEFAULT ""')
-        changed = True
-
-    if changed:
-        con.commit()
-    con.close()
-
-# --------- Backup / Restore JSON ---------
-def save_json_backup():
-    players = Player.query.order_by(Player.id.asc()).all()
-    payload = {'updated_at_utc': datetime.utcnow().isoformat(), 'players': []}
-    for p in players:
-        payload['players'].append(p.to_dict())
-    tmp = data_path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, data_path)
-
-def restore_from_json_if_empty():
-    if Player.query.count() > 0 or not os.path.exists(data_path):
-        return
-    try:
-        with open(data_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for item in data.get('players', []):
-            p = Player(
-                id=item.get('id'),
-                full_name=(item.get('full_name') or '').strip(),
-                matricula=(item.get('matricula') or '').strip(),
-            )
-            db.session.add(p)
-        db.session.commit()
-    except Exception as e:
-        print('No se pudo restaurar desde JSON:', e)
-
-# --------- Init ---------
-if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    ensure_sqlite_columns()
-with app.app_context():
-    db.create_all()
-    restore_from_json_if_empty()
-
-print(f"[INIT] DATA_DIR={DATA_DIR}")
-print(f"[INIT] DB={app.config['SQLALCHEMY_DATABASE_URI']}")
-print(f"[INIT] JSON={data_path}")
-
-# --------- Rutas ---------
+# --------- Validaciones ---------
 NAME_RE = re.compile(r"^[A-Za-zÁÉÍÓÚáéíóúÑñÜü\s.'-]+$")
 
+# --------- Rutas ---------
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
     if request.method == 'HEAD':
         return '', 200
-    players = Player.query.order_by(Player.id.asc()).all()
     context = {
-        'players': [p.to_dict() for p in players],
+        'players': STORE["players"],
         'logo_url': LOGO_URL,
         'header_logo_url': LOGO_HEADER_URL
     }
     try:
         return render_template('index.html', **context)
     except TemplateNotFound:
-        # Fallback mínimo si falta el template
+        # Fallback mínimo si falta template
         return render_template_string("""
         <!doctype html>
         <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -215,14 +146,14 @@ def healthz():
 
 @app.route('/backup.json')
 def download_backup():
-    if not os.path.exists(data_path):
-        save_json_backup()
-    return send_file(data_path, mimetype='application/json', as_attachment=True, download_name='inscriptos.json')
+    # Aseguro grabar antes de servir
+    with LOCK:
+        save_store()
+    return send_file(DATA_JSON, mimetype='application/json', as_attachment=True, download_name='inscriptos.json')
 
 @app.route('/api/players')
 def api_players():
-    players = Player.query.order_by(Player.id.asc()).all()
-    return jsonify([p.to_dict() for p in players])
+    return jsonify(STORE["players"])
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -239,40 +170,42 @@ def signup():
     if matricula and not re.fullmatch(r'\d{1,12}', matricula):
         return jsonify({'ok': False, 'error': 'La matrícula debe contener solo números (1–12 dígitos).'}), 400
 
-    try:
-        player = Player(full_name=full_name, matricula=matricula or '')
-        db.session.add(player)
-        db.session.commit()
-        print('[DB] Insert OK -> id', player.id)
-    except Exception as e:
-        db.session.rollback()
-        print('[DB] ERROR al insertar:', e)
-        return jsonify({'ok': False, 'error': 'No se pudo guardar en la base.'}), 500
+    with LOCK:
+        # Genero ID incremental
+        STORE["last_id"] = int(STORE.get("last_id", 0)) + 1
+        player = {
+            "id": STORE["last_id"],
+            "full_name": full_name,
+            "matricula": matricula or ""
+        }
+        STORE["players"].append(player)
+        try:
+            save_store()
+            print('[STORE] Guardado OK -> id', player["id"])
+        except Exception as e:
+            print('[STORE] ERROR al guardar JSON:', e)
+            # Revierto en memoria si falló persistencia
+            STORE["players"].pop()
+            STORE["last_id"] -= 1
+            return jsonify({'ok': False, 'error': 'No se pudo guardar en el servidor.'}), 500
 
-    try:
-        save_json_backup()
-    except Exception as e:
-        print('[JSON] WARN no se pudo actualizar backup:', e)
-
-    payload = player.to_dict()
-    socketio.emit('player_added', payload)
-    return jsonify({'ok': True, 'player': payload})
+    socketio.emit('player_added', player)
+    return jsonify({'ok': True, 'player': player})
 
 @app.route('/export.csv')
 def export_csv():
-    players = Player.query.order_by(Player.id.asc()).all()
     si = StringIO()
     writer = csv.writer(si)
     writer.writerow(['id', 'full_name', 'matricula'])
-    for p in players:
-        writer.writerow([p.id, p.full_name, p.matricula])
+    for p in STORE["players"]:
+        writer.writerow([p['id'], p['full_name'], p['matricula']])
     bio = BytesIO(si.getvalue().encode('utf-8-sig'))
     bio.seek(0)
     return send_file(bio, mimetype='text/csv', as_attachment=True, download_name='inscriptos.csv')
 
 @socketio.on('connect')
 def handle_connect():
-    players = Player.query.order_by(Player.id.asc()).all()
-    emit('bootstrap', [p.to_dict() for p in players])
+    emit('bootstrap', STORE["players"])
+
 
 
